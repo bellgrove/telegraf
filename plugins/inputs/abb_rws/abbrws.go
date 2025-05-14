@@ -8,13 +8,13 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"time"
 
 	"encoding/xml"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-
 	"sync"
 
 	ws "github.com/gorilla/websocket"
@@ -40,6 +40,7 @@ type semaphore chan empty
 
 type AbbRws struct {
 	Host           string                    `toml:"host"`
+	SubReqs        []subs                    `toml:"inputs"`
 	Username       config.Secret             `toml:"username"`
 	Password       config.Secret             `toml:"password"`
 	ConnectTimeout config.Duration           `toml:"connect_timeout"`
@@ -47,41 +48,52 @@ type AbbRws struct {
 	ReadTimeout    config.Duration           `toml:"read_timeout"`
 	Headers        map[string]*config.Secret `toml:"headers"`
 	Log            telegraf.Logger           `toml:"-"`
+
 	proxy.HTTPProxy
 	proxy.Socks5ProxyConfig
 	tls.ClientConfig
-
-	conn *ws.Conn
-	acc  telegraf.Accumulator
-
-	client *http.Client
-	jar    http.CookieJar
-
-	parser telegraf.Parser
-	// conn    *amqp.Connection
+	client  *http.Client
+	jar     http.CookieJar
+	conn    *ws.Conn
+	acc     telegraf.Accumulator
+	parser  telegraf.Parser
 	wg      *sync.WaitGroup
 	cancel  context.CancelFunc
 	decoder internal.ContentDecoder
 }
 
-func (*externalAuth) Mechanism() string {
-	return "EXTERNAL"
+type subs struct {
+	Target   string `toml:"target"`
+	Priority int    `toml:"priority"`
 }
 
-func (*externalAuth) Response() string {
-	return "\000"
+type wsMsg struct {
+	Parts []wsMsgPart `xml:"body>div>ul>li"`
 }
 
-func (*AbbRws) SampleConfig() string {
-	return sampleConfig
+type wsMsgPart struct {
+	MsgType string         `xml:"class,attr"`
+	Source  wsMsgPartVal   `xml:"a"`
+	Content []wsMsgPartVal `xml:"span"`
+}
+type wsMsgPartVal struct {
+	Class string `xml:"class,attr"`
+	Value string `xml:",chardata"`
+	Href  string `xml:"href,attr"`
 }
 
-func (a *AbbRws) Init() error {
-	return nil
-}
+// TODO: function to send pings
 
-func init() {
-	inputs.Add("abb_rws", func() telegraf.Input { return &AbbRws{} })
+func (a *AbbRws) formatSubs(reqs []subs) (string, error) {
+	out := ""
+	for i := 1; i <= len(reqs); i++ {
+		out = out + fmt.Sprintf("resources=%d&%d=%s&%d-p=%d&", i, i, reqs[i-1].Target, i, reqs[i-1].Priority)
+		//subReq := "resources=1&1=/rw/iosystem/signals/EtherNetIP/Local_IO/Local_IO_0_DO4;state&1-p=1&resources=2&2=/rw/elog/0&2-p=1&resources=3&3=/rw/dipc/PC_SDK_Q&3-p=1"
+	}
+	out, _ = strings.CutSuffix(out, "&")
+	err := error(nil)
+
+	return out, err
 }
 
 func (a *AbbRws) Start(acc telegraf.Accumulator) error {
@@ -125,10 +137,10 @@ func (a *AbbRws) Start(acc telegraf.Accumulator) error {
 	// Create queues if needed
 	// Create subscription - with returned params
 	// Connect(URL string, abbX string, session string)
-	// subReq := "resources=1&1=/rw/iosystem/signals/Virtual1/Board1/di1;state&1-p=0&resources=2&2=/rw/iosystem/signals/Virtual1/Board1/di2;state&2-p=0"
-	// subReq := "resources=1&1=/rw/elog/0&1-p=1"
+	// subReq := "resources=1&1=/rw/iosystem/signals/EtherNetIP/Local_IO/Local_IO_0_DO4;state&1-p=1&resources=2&2=/rw/elog/0&2-p=1&resources=3&3=/rw/dipc/PC_SDK_Q&3-p=1"
 
-	subReq := "resources=1&1=/rw/iosystem/signals/EtherNetIP/Local_IO/Local_IO_0_DO4;state&1-p=1&resources=2&2=/rw/elog/0&2-p=1&resources=3&3=/rw/dipc/PC_SDK_Q&3-p=1"
+	subReq, err := a.formatSubs(a.SubReqs[:])
+
 	resp, err = a.client.Post(a.Host+"/subscription", "Content-Type: application/x-www-form-urlencoded", bytes.NewBufferString(subReq))
 	if err != nil {
 		return fmt.Errorf("unable to create subscription: %w", err)
@@ -151,10 +163,6 @@ func (a *AbbRws) Start(acc telegraf.Accumulator) error {
 		return fmt.Errorf("websocket connection failed: %w", err)
 	}
 
-	return nil
-}
-
-func (*AbbRws) Gather(_ telegraf.Accumulator) error {
 	return nil
 }
 
@@ -258,21 +266,6 @@ func (w *AbbRws) read(conn *ws.Conn) {
 	}
 }
 
-type wsMsgPartVal struct {
-	Class string `xml:"class,attr"`
-	Value string `xml:",chardata"`
-}
-
-type wsMsgPart struct {
-	Source  string         `xml:"class,attr"`
-	Target  string         `xml:"title,attr"`
-	Content []wsMsgPartVal `xml:"span"`
-}
-
-type wsMsg struct {
-	Parts []wsMsgPart `xml:"body>div>ul>li"`
-}
-
 func (a *AbbRws) parseMsg(msg []byte) (map[string]interface{}, error) {
 	// Get as a message of some sort?
 	ret := make(map[string]interface{})
@@ -284,16 +277,43 @@ func (a *AbbRws) parseMsg(msg []byte) (map[string]interface{}, error) {
 		return nil, err
 	}
 
-	ret["source"] = msgStruct.Parts[0].Source
-	ret["target"] = msgStruct.Parts[0].Target
-	ret["content"] = msgStruct.Parts[0].Content[0].Value
+	ret["msgtype"] = msgStruct.Parts[0].MsgType
+	ret["source"] = msgStruct.Parts[0].Source.Href
+	ret["content"] = msgStruct.Parts[0].Content
 
 	return ret, nil
 }
 
-func (a *AbbRws) Stop() {
-	// TODO: unsub, other message types, subscription list from config, send pings
-	// Unsubscribe
-	// Delete queue??
-	a.conn.Close()
+func (a *AbbRws) Stop() error {
+	// Unsubscribe, Delete queue??
+	if a.conn == nil {
+		return nil
+	}
+	err := a.conn.Close()
+	a.conn = nil
+	return err
+}
+
+func (*externalAuth) Mechanism() string {
+	return "EXTERNAL"
+}
+
+func (*externalAuth) Response() string {
+	return "\000"
+}
+
+func (*AbbRws) SampleConfig() string {
+	return sampleConfig
+}
+
+func (a *AbbRws) Init() error {
+	return nil
+}
+
+func init() {
+	inputs.Add("abb_rws", func() telegraf.Input { return &AbbRws{} })
+}
+
+func (*AbbRws) Gather(_ telegraf.Accumulator) error {
+	return nil
 }
