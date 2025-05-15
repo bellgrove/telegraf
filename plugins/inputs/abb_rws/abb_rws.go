@@ -82,13 +82,10 @@ type wsMsgPartVal struct {
 	Href  string `xml:"href,attr"`
 }
 
-// TODO: function to send pings
-
 func (a *AbbRws) formatSubs(reqs []subs) (string, error) {
 	out := ""
 	for i := 1; i <= len(reqs); i++ {
 		out = out + fmt.Sprintf("resources=%d&%d=%s&%d-p=%d&", i, i, reqs[i-1].Target, i, reqs[i-1].Priority)
-		//subReq := "resources=1&1=/rw/iosystem/signals/EtherNetIP/Local_IO/Local_IO_0_DO4;state&1-p=1&resources=2&2=/rw/elog/0&2-p=1&resources=3&3=/rw/dipc/PC_SDK_Q&3-p=1"
 	}
 	out, _ = strings.CutSuffix(out, "&")
 	err := error(nil)
