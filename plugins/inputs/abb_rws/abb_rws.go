@@ -94,6 +94,8 @@ func (a *AbbRws) formatSubs(reqs []subs) (string, error) {
 }
 
 func (a *AbbRws) Start(acc telegraf.Accumulator) error {
+	a.Log.Info("Starting RWS input")
+
 	a.acc = acc
 	urlHost, err := url.Parse(a.Host)
 
@@ -251,9 +253,31 @@ func (w *AbbRws) read(conn *ws.Conn) {
 		w.Log.Info("recv: %s", resp)
 
 		// example tags - host,
-		w.acc.AddFields("rws_rmq", nil, nil)
-		w.acc.AddFields("rws_io", nil, nil)
-		w.acc.AddFields("rws_elog", nil, nil)
+		if resp["msgtype"].(string) == "dipc-msg-ev" {
+			w.Log.Info("Got RMQ message")
+			content := resp["content"].([]wsMsgPartVal)
+
+			fields := make(map[string]interface{})
+			// tags := make(map[string]string{})
+
+			// fields := map[string]interface{}{
+			// 	"message": resp["dipc-data"].(string),
+			// 	"userdef": resp["dipc-userdef"].(int),
+			// }
+			tags := map[string]string{"source": resp["source"].(string)}
+
+			for _, f := range content {
+				if f.Class == "dipc-data" {
+					fields["message"] = f.Value
+				} else if f.Class == "dipc-userdef" {
+					fields["userdef"] = f.Value
+				}
+			}
+
+			w.acc.AddFields("rws_rmq", fields, tags)
+		}
+		// w.acc.AddFields("rws_io", nil, nil)
+		// w.acc.AddFields("rws_elog", nil, nil)
 
 		// if w.ReadTimeout > 0 {
 		// 	if err := conn.SetReadDeadline(time.Now().Add(time.Duration(w.ReadTimeout))); err != nil {
@@ -281,29 +305,30 @@ func (a *AbbRws) parseMsg(msg []byte) (map[string]interface{}, error) {
 	return ret, nil
 }
 
-func (a *AbbRws) Stop() error {
+func (a *AbbRws) Stop() {
 	// Unsubscribe, Delete queue??
-	if a.conn == nil {
-		return nil
+	if a.conn != nil {
+		err := a.conn.Close()
+		if err != nil {
+			a.Log.Errorf("error closing websocket connection: %v", err)
+		}
 	}
-	err := a.conn.Close()
-	a.conn = nil
-	return err
 }
 
-func (*externalAuth) Mechanism() string {
-	return "EXTERNAL"
-}
+// func (*externalAuth) Mechanism() string {
+// 	return "EXTERNAL"
+// }
 
-func (*externalAuth) Response() string {
-	return "\000"
-}
+// func (*externalAuth) Response() string {
+// 	return "\000"
+// }
 
 func (*AbbRws) SampleConfig() string {
 	return sampleConfig
 }
 
 func (a *AbbRws) Init() error {
+	a.Log.Info("Init")
 	return nil
 }
 
@@ -311,6 +336,6 @@ func init() {
 	inputs.Add("abb_rws", func() telegraf.Input { return &AbbRws{} })
 }
 
-func (*AbbRws) Gather(_ telegraf.Accumulator) error {
+func (a *AbbRws) Gather(_ telegraf.Accumulator) error {
 	return nil
 }

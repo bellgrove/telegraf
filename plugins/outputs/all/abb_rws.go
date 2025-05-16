@@ -1,4 +1,4 @@
-//go:build !custom || outputs || outputs.simpleoutput
+//go:build !custom || outputs || outputs.abb_rws
 
 package all
 
