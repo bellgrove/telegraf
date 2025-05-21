@@ -40,6 +40,7 @@ type semaphore chan empty
 
 type AbbRws struct {
 	Host           string                    `toml:"host"`
+	RobotId        int                       `toml:"robId"`
 	SubReqs        []subs                    `toml:"inputs"`
 	Username       config.Secret             `toml:"username"`
 	Password       config.Secret             `toml:"password"`
@@ -73,7 +74,7 @@ type wsMsg struct {
 
 type wsMsgPart struct {
 	MsgType string         `xml:"class,attr"`
-	Source  wsMsgPartVal   `xml:"a"`
+	Queue   wsMsgPartVal   `xml:"a"`
 	Content []wsMsgPartVal `xml:"span"`
 }
 type wsMsgPartVal struct {
@@ -83,6 +84,7 @@ type wsMsgPartVal struct {
 }
 
 func (a *AbbRws) formatSubs(reqs []subs) (string, error) {
+	// Example SubReq: "resources=1&1=/rw/iosystem/signals/EtherNetIP/Local_IO/Local_IO_0_DO4;state&1-p=1&resources=2&2=/rw/elog/0&2-p=1&resources=3&3=/rw/dipc/PC_SDK_Q&3-p=1"
 	out := ""
 	for i := 1; i <= len(reqs); i++ {
 		out = out + fmt.Sprintf("resources=%d&%d=%s&%d-p=%d&", i, i, reqs[i-1].Target, i, reqs[i-1].Priority)
@@ -136,7 +138,6 @@ func (a *AbbRws) Start(acc telegraf.Accumulator) error {
 	// Create queues if needed
 	// Create subscription - with returned params
 	// Connect(URL string, abbX string, session string)
-	// subReq := "resources=1&1=/rw/iosystem/signals/EtherNetIP/Local_IO/Local_IO_0_DO4;state&1-p=1&resources=2&2=/rw/elog/0&2-p=1&resources=3&3=/rw/dipc/PC_SDK_Q&3-p=1"
 
 	subReq, err := a.formatSubs(a.SubReqs[:])
 
@@ -150,7 +151,7 @@ func (a *AbbRws) Start(acc telegraf.Accumulator) error {
 		log.Fatal(err)
 	}
 	bodyString := string(bodyBytes)
-	a.Log.Info("Got response %s, %s, %s", resp.Status, resp.Header, bodyString)
+	a.Log.Info(fmt.Sprintf("Got response %s, %s, %s", resp.Status, resp.Header, bodyString))
 
 	wsUrl, err := resp.Location()
 	if err != nil {
@@ -165,29 +166,29 @@ func (a *AbbRws) Start(acc telegraf.Accumulator) error {
 	return nil
 }
 
-func (w *AbbRws) Connect(URL *url.URL, cookies []*http.Cookie) error {
-	w.Log.Debug("Connecting to websocket: ", URL)
+func (a *AbbRws) Connect(URL *url.URL, cookies []*http.Cookie) error {
+	a.Log.Debug("Connecting to websocket: ", URL)
 
-	tlsCfg, err := w.ClientConfig.TLSConfig()
+	tlsCfg, err := a.ClientConfig.TLSConfig()
 	if err != nil {
 		return fmt.Errorf("error creating TLS config: %w", err)
 	}
 
-	dialProxy, err := w.HTTPProxy.Proxy()
+	dialProxy, err := a.HTTPProxy.Proxy()
 	if err != nil {
 		return fmt.Errorf("error creating proxy: %w", err)
 	}
 
 	dialer := &ws.Dialer{
 		Proxy:            dialProxy,
-		HandshakeTimeout: time.Duration(w.ConnectTimeout),
+		HandshakeTimeout: time.Duration(a.ConnectTimeout),
 		TLSClientConfig:  tlsCfg,
 		Subprotocols:     []string{"robapi2_subscription"},
-		Jar:              w.jar,
+		Jar:              a.jar,
 	}
 
-	if w.Socks5ProxyEnabled {
-		netDialer, err := w.Socks5ProxyConfig.GetDialer()
+	if a.Socks5ProxyEnabled {
+		netDialer, err := a.Socks5ProxyConfig.GetDialer()
 		if err != nil {
 			return fmt.Errorf("error connecting to socks5 proxy: %w", err)
 		}
@@ -195,7 +196,7 @@ func (w *AbbRws) Connect(URL *url.URL, cookies []*http.Cookie) error {
 	}
 
 	headers := http.Header{}
-	for k, v := range w.Headers {
+	for k, v := range a.Headers {
 		secret, err := v.Get()
 		if err != nil {
 			return fmt.Errorf("getting header secret %q failed: %w", k, err)
@@ -215,28 +216,28 @@ func (w *AbbRws) Connect(URL *url.URL, cookies []*http.Cookie) error {
 		return fmt.Errorf("wrong status code while connecting to server: %d", resp.StatusCode)
 	}
 
-	w.conn = conn
-	go w.read(conn)
+	a.conn = conn
+	go a.read(conn)
 
 	return nil
 }
 
-func (w *AbbRws) read(conn *ws.Conn) {
+func (a *AbbRws) read(conn *ws.Conn) {
 	defer func() { _ = conn.Close() }()
-	// if w.ReadTimeout > 0 {
-	// 	if err := conn.SetReadDeadline(time.Now().Add(time.Duration(w.ReadTimeout))); err != nil {
-	// 		w.Log.Errorf("error setting read deadline: %v", err)
-	// 		return
-	// 	}
-	// 	conn.SetPingHandler(func(string) error {
-	// 		err := conn.SetReadDeadline(time.Now().Add(time.Duration(w.ReadTimeout)))
-	// 		if err != nil {
-	// 			w.Log.Errorf("error setting read deadline: %v", err)
-	// 			return err
-	// 		}
-	// 		return conn.WriteControl(ws.PongMessage, nil, time.Now().Add(time.Duration(w.WriteTimeout)))
-	// 	})
-	// }
+	if a.ReadTimeout > 0 {
+		if err := conn.SetReadDeadline(time.Now().Add(time.Duration(a.ReadTimeout))); err != nil {
+			a.Log.Errorf("error setting read deadline: %v", err)
+			return
+		}
+		conn.SetPingHandler(func(string) error {
+			err := conn.SetReadDeadline(time.Now().Add(time.Duration(a.ReadTimeout)))
+			if err != nil {
+				a.Log.Errorf("error setting read deadline: %v", err)
+				return err
+			}
+			return conn.WriteControl(ws.PongMessage, nil, time.Now().Add(time.Duration(a.WriteTimeout)))
+		})
+	}
 	for {
 		// Need to read a connection (to properly process pings from a server).
 		_, msg, err := conn.ReadMessage()
@@ -245,45 +246,68 @@ func (w *AbbRws) read(conn *ws.Conn) {
 			// In the beginning of this goroutine we have defer section that closes such connection.
 			// After that connection will be tried to reestablish on next Write.
 			if ws.IsUnexpectedCloseError(err, ws.CloseGoingAway, ws.CloseAbnormalClosure) {
-				w.Log.Errorf("error reading websocket connection: %v", err)
+				a.Log.Errorf("error reading websocket connection: %v", err)
 			}
 			return
 		}
-		resp, err := w.parseMsg(msg)
-		w.Log.Info("recv: %s", resp)
+		a.Log.Info("Message recieved")
+		resp, err := a.parseMsg(msg)
+		a.Log.Info("Parsed as: ", resp)
 
-		// example tags - host,
-		if resp["msgtype"].(string) == "dipc-msg-ev" {
-			w.Log.Info("Got RMQ message")
+		// Format response according to message type
+		switch resp["msgtype"].(string) {
+		case "dipc-msg-ev":
+			a.Log.Info("Got RMQ message")
 			content := resp["content"].([]wsMsgPartVal)
 
+			tags := map[string]string{"msgtype": resp["msgtype"].(string), "endpoint": resp["endpoint"].(string)}
 			fields := make(map[string]interface{})
-			// tags := make(map[string]string{})
-
-			// fields := map[string]interface{}{
-			// 	"message": resp["dipc-data"].(string),
-			// 	"userdef": resp["dipc-userdef"].(int),
-			// }
-			tags := map[string]string{"source": resp["source"].(string)}
 
 			for _, f := range content {
-				if f.Class == "dipc-data" {
-					fields["message"] = f.Value
-				} else if f.Class == "dipc-userdef" {
-					fields["userdef"] = f.Value
-				}
+				fields[f.Class] = f.Value
 			}
 
-			w.acc.AddFields("rws_rmq", fields, tags)
-		}
-		// w.acc.AddFields("rws_io", nil, nil)
-		// w.acc.AddFields("rws_elog", nil, nil)
+			name := fmt.Sprintf("rws_%d", a.RobotId)
+			a.acc.AddFields(name, fields, tags)
+			a.Log.Info(fmt.Sprintf("MQTT Sent: %s, fields: %s, tags: %s", name, fields, tags))
+		case "elog-message-ev":
+			a.Log.Info("Got error message")
 
-		// if w.ReadTimeout > 0 {
-		// 	if err := conn.SetReadDeadline(time.Now().Add(time.Duration(w.ReadTimeout))); err != nil {
-		// 		return
-		// 	}
-		// }
+			eMsg, err := a.client.Get(a.Host + resp["source"].(string))
+			if err != nil {
+				a.Log.Error("problem getting error details: ", err)
+				return
+			}
+			eMsgBytes, err := io.ReadAll(eMsg.Body)
+			resp, err = a.parseMsg(eMsgBytes)
+			if err != nil {
+				a.Log.Error("problem parsing error message: ", err)
+				return
+			}
+
+			content := resp["content"].([]wsMsgPartVal)
+
+			tags := map[string]string{"msgtype": resp["msgtype"].(string), "endpoint": resp["endpoint"].(string)}
+			fields := make(map[string]interface{})
+
+			for _, f := range content {
+				fields[f.Class] = f.Value
+			}
+
+			name := resp["msgtype"].(string)
+			a.acc.AddFields(name, fields, tags)
+			a.Log.Info(fmt.Sprintf("MQTT Sent: %s, fields: %s, tags: %s", name, fields, tags))
+		case "ios-signalstate-ev":
+
+		default:
+			a.Log.Error("message of unknown type")
+		}
+
+		if a.ReadTimeout > 0 {
+			if err := conn.SetReadDeadline(time.Now().Add(time.Duration(a.ReadTimeout))); err != nil {
+				return
+			}
+		}
 	}
 }
 
@@ -299,7 +323,7 @@ func (a *AbbRws) parseMsg(msg []byte) (map[string]interface{}, error) {
 	}
 
 	ret["msgtype"] = msgStruct.Parts[0].MsgType
-	ret["source"] = msgStruct.Parts[0].Source.Href
+	ret["endpoint"] = msgStruct.Parts[0].Queue.Href
 	ret["content"] = msgStruct.Parts[0].Content
 
 	return ret, nil
@@ -315,20 +339,12 @@ func (a *AbbRws) Stop() {
 	}
 }
 
-// func (*externalAuth) Mechanism() string {
-// 	return "EXTERNAL"
-// }
-
-// func (*externalAuth) Response() string {
-// 	return "\000"
-// }
-
 func (*AbbRws) SampleConfig() string {
 	return sampleConfig
 }
 
 func (a *AbbRws) Init() error {
-	a.Log.Info("Init")
+	// a.Log.Info("Init")
 	return nil
 }
 
