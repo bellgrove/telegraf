@@ -7,7 +7,6 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
-	"log"
 	"strings"
 	"time"
 
@@ -40,7 +39,7 @@ type semaphore chan empty
 
 type AbbRws struct {
 	Host           string                    `toml:"host"`
-	RobotId        int                       `toml:"robId"`
+	RobotId        int                       `toml:"rob_id"`
 	SubReqs        []subs                    `toml:"inputs"`
 	Username       config.Secret             `toml:"username"`
 	Password       config.Secret             `toml:"password"`
@@ -133,11 +132,19 @@ func (a *AbbRws) Start(acc telegraf.Accumulator) error {
 	if err != nil {
 		return fmt.Errorf("unable to login: %w", err)
 	}
-	a.Log.Info("Login request: ", resp.Status, resp.Header)
+	resp.Body.Close()
+	// a.Log.Info("Login request: ", resp.Status, resp.Header)
 
 	// Create queues if needed
 	// Create subscription - with returned params
 	// Connect(URL string, abbX string, session string)
+
+	for _, src := range a.SubReqs {
+		if resp, err = a.client.Get(a.Host + src.Target); resp.StatusCode > 299 {
+			createQ := fmt.Sprintf("dipc-queue-name=%s&dipc-queue-size=%d&dipc-max-msg-size=%d", strings.TrimPrefix(src.Target, "/rw/dipc/"), 5, 444)
+			a.client.Post(a.Host+"/rw/dipc?action=dipc-create", "Content-Type: application/x-www-form-urlencoded", bytes.NewBufferString(createQ))
+		}
+	}
 
 	subReq, err := a.formatSubs(a.SubReqs[:])
 
@@ -146,12 +153,6 @@ func (a *AbbRws) Start(acc telegraf.Accumulator) error {
 		return fmt.Errorf("unable to create subscription: %w", err)
 	}
 	defer resp.Body.Close()
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-	bodyString := string(bodyBytes)
-	a.Log.Info(fmt.Sprintf("Got response %s, %s, %s", resp.Status, resp.Header, bodyString))
 
 	wsUrl, err := resp.Location()
 	if err != nil {
@@ -250,14 +251,14 @@ func (a *AbbRws) read(conn *ws.Conn) {
 			}
 			return
 		}
-		a.Log.Info("Message recieved")
+
 		resp, err := a.parseMsg(msg)
-		a.Log.Info("Parsed as: ", resp)
+		a.Log.Info("Message Recieved: ", resp)
 
 		// Format response according to message type
 		switch resp["msgtype"].(string) {
 		case "dipc-msg-ev":
-			a.Log.Info("Got RMQ message")
+			// a.Log.Info("Got RMQ message")
 			content := resp["content"].([]wsMsgPartVal)
 
 			tags := map[string]string{"msgtype": resp["msgtype"].(string), "endpoint": resp["endpoint"].(string)}
@@ -269,21 +270,24 @@ func (a *AbbRws) read(conn *ws.Conn) {
 
 			name := fmt.Sprintf("rws_%d", a.RobotId)
 			a.acc.AddFields(name, fields, tags)
-			a.Log.Info(fmt.Sprintf("MQTT Sent: %s, fields: %s, tags: %s", name, fields, tags))
+			// a.Log.Info(fmt.Sprintf("MQTT Sent: %s, fields: %s, tags: %s", name, fields, tags))
 		case "elog-message-ev":
 			a.Log.Info("Got error message")
 
-			eMsg, err := a.client.Get(a.Host + resp["source"].(string))
+			eMsg, err := a.client.Get(a.Host + resp["endpoint"].(string))
 			if err != nil {
 				a.Log.Error("problem getting error details: ", err)
 				return
 			}
+			defer eMsg.Body.Close()
 			eMsgBytes, err := io.ReadAll(eMsg.Body)
 			resp, err = a.parseMsg(eMsgBytes)
 			if err != nil {
 				a.Log.Error("problem parsing error message: ", err)
 				return
 			}
+
+			a.Log.Info("Error details: ", resp)
 
 			content := resp["content"].([]wsMsgPartVal)
 
@@ -296,8 +300,9 @@ func (a *AbbRws) read(conn *ws.Conn) {
 
 			name := resp["msgtype"].(string)
 			a.acc.AddFields(name, fields, tags)
-			a.Log.Info(fmt.Sprintf("MQTT Sent: %s, fields: %s, tags: %s", name, fields, tags))
+			// a.Log.Info(fmt.Sprintf("MQTT Sent: %s, fields: %s, tags: %s", name, fields, tags))
 		case "ios-signalstate-ev":
+			a.Log.Info("Got IO Message")
 
 		default:
 			a.Log.Error("message of unknown type")
@@ -344,7 +349,6 @@ func (*AbbRws) SampleConfig() string {
 }
 
 func (a *AbbRws) Init() error {
-	// a.Log.Info("Init")
 	return nil
 }
 
