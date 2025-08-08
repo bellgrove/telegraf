@@ -131,7 +131,6 @@ func (s *AbbRws_RMQ) Write(metrics []telegraf.Metric) error {
 			return s.WriteRMQ(metric)
 		case "ios-signalstate-ev":
 			// IO signal change
-			// No action needed
 			return nil
 		case "elog-message-ev", "elog-message":
 			// Event Log message
@@ -196,23 +195,33 @@ const FruitSize int = 7 // The number of coordinates per fruit
 func (s *AbbRws_RMQ) WriteFruit(metric telegraf.Metric) error {
 	s.Log.Info("Writing fruit...")
 	// Extract message vars
-	fields := metric.FieldList()
-	fruitArray := [FruitMax][FruitSize]float64{}
+	//fields := metric.FieldList()
+	// fruitArray := [FruitMax][FruitSize]float64{}
 
-	for _, f := range fields {
-		// Each field has the form:   "fields_fruitIdx_coordIdx":value
-		idx := strings.Split(f.Key, "_")
-		fruit, err1 := strconv.Atoi(idx[1])
-		coord, err2 := strconv.Atoi(idx[2])
-		if fruit > FruitMax-1 || err1 != nil || err2 != nil {
-			continue
-		}
-		fruitArray[fruit][coord] = f.Value.(float64)
-	}
+	// for _, f := range fields {
+	// 	// Each field has the form:   "fields_fruitIdx_coordIdx":value
+	// 	idx := strings.Split(f.Key, "_")
+	// 	fruit, err1 := strconv.Atoi(idx[1])
+	// 	coord, err2 := strconv.Atoi(idx[2])
+	// 	if fruit > FruitMax-1 || err1 != nil || err2 != nil {
+	// 		continue
+	// 	}
+	// 	fruitArray[fruit][coord] = f.Value.(float64)
+	// }
+
+	var x, y, z, w, a, b, cnt any
+	x, _ = metric.GetField("fields_x")
+	y, _ = metric.GetField("fields_y")
+	z, _ = metric.GetField("fields_z")
+	w, _ = metric.GetField("fields_w")
+	a, _ = metric.GetField("fields_a")
+	b, _ = metric.GetField("fields_b")
+	cnt, _ = metric.GetField("fields_cnt")
 
 	// Format as RMQ message
 	userdef_val := s.RobotId
-	message := fmt.Sprintf("Fruit{%d};%.6f", FruitMax, fruitArray)
+	// message := fmt.Sprintf("Fruit{%d};%.6f", FruitMax, fruitArray)
+	message := fmt.Sprintf("Fruit;[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f]", x, y, z, w, a, b, cnt)
 	message = strings.ReplaceAll(message, " ", ",")
 	message = strings.ReplaceAll(message, ".000000", ".0")
 	fullMessage := fmt.Sprintf("dipc-src-queue-name=%s&dipc-cmd=%d&dipc-userdef=%d&dipc-msgtype=%d&dipc-data=%s", s.SenderName, 111, userdef_val, 1, message)
