@@ -272,7 +272,7 @@ func (a *AbbRws) read(conn *ws.Conn) {
 			a.acc.AddFields(name, fields, tags)
 			// a.Log.Info(fmt.Sprintf("MQTT Sent: %s, fields: %s, tags: %s", name, fields, tags))
 		case "elog-message-ev":
-			a.Log.Info("Got error message")
+			// a.Log.Info("Got error message")
 
 			eMsg, err := a.client.Get(a.Host + resp["endpoint"].(string))
 			if err != nil {
@@ -287,7 +287,7 @@ func (a *AbbRws) read(conn *ws.Conn) {
 				return
 			}
 
-			a.Log.Info("Error details: ", resp)
+			// a.Log.Info("Error details: ", resp)
 
 			content := resp["content"].([]wsMsgPartVal)
 

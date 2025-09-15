@@ -90,6 +90,9 @@ func (s *AbbRws_RMQ) Connect() error {
 	}
 	defer resp.Body.Close()
 
+	// Ping robot to verify connection
+	s.client.Post(s.Host+s.TargetQueue+"?action=dipc-send", "Content-Type: application/x-www-form-urlencoded", bytes.NewBufferString("dipc-src-queue-name=PC_SDK_Q&dipc-cmd=111&dipc-userdef=2&dipc-msgtype=1&dipc-data=Ping;[TRUE]"))
+
 	return nil
 }
 
@@ -110,9 +113,9 @@ func (s *AbbRws_RMQ) Write(metrics []telegraf.Metric) error {
 
 	// Limits number of write attempts
 	s.attempts++
-	if s.attempts > 4 {
-		s.Log.Error("attempts exceeded, aborting write")
+	if s.attempts >= 4 {
 		s.attempts = 0
+		s.Log.Error("attempts exceeded, aborting message")
 		return nil
 	}
 
@@ -129,9 +132,6 @@ func (s *AbbRws_RMQ) Write(metrics []telegraf.Metric) error {
 		case "dipc-msg-ev":
 			// RMQ message
 			return s.WriteRMQ(metric)
-		case "ios-signalstate-ev":
-			// IO signal change
-			return nil
 		case "elog-message-ev", "elog-message":
 			// Event Log message
 			return s.WriteELog(metric)
@@ -158,7 +158,7 @@ func (s *AbbRws_RMQ) WriteELog(metric telegraf.Metric) error {
 	switch severity {
 	case "0", "1":
 		// Informational Event/State Change -> Update log and do nothing
-		s.Log.Info("New Info Event: ", metric)
+		// s.Log.Info("New Info Event: ", metric)
 		return nil
 	case "2":
 		// Warning Event -> Hold until all clear
@@ -189,25 +189,8 @@ func (s *AbbRws_RMQ) WriteELog(metric telegraf.Metric) error {
 	return nil
 }
 
-const FruitMax int = 4  // Maximum number of fruit that can be sent in one RMQ message
-const FruitSize int = 7 // The number of coordinates per fruit
-
 func (s *AbbRws_RMQ) WriteFruit(metric telegraf.Metric) error {
 	s.Log.Info("Writing fruit...")
-	// Extract message vars
-	//fields := metric.FieldList()
-	// fruitArray := [FruitMax][FruitSize]float64{}
-
-	// for _, f := range fields {
-	// 	// Each field has the form:   "fields_fruitIdx_coordIdx":value
-	// 	idx := strings.Split(f.Key, "_")
-	// 	fruit, err1 := strconv.Atoi(idx[1])
-	// 	coord, err2 := strconv.Atoi(idx[2])
-	// 	if fruit > FruitMax-1 || err1 != nil || err2 != nil {
-	// 		continue
-	// 	}
-	// 	fruitArray[fruit][coord] = f.Value.(float64)
-	// }
 
 	var x, y, z, w, a, b, cnt any
 	x, _ = metric.GetField("fields_x")
@@ -220,7 +203,6 @@ func (s *AbbRws_RMQ) WriteFruit(metric telegraf.Metric) error {
 
 	// Format as RMQ message
 	userdef_val := s.RobotId
-	// message := fmt.Sprintf("Fruit{%d};%.6f", FruitMax, fruitArray)
 	message := fmt.Sprintf("Fruit;[%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f]", x, y, z, w, a, b, cnt)
 	message = strings.ReplaceAll(message, " ", ",")
 	message = strings.ReplaceAll(message, ".000000", ".0")
@@ -233,6 +215,7 @@ func (s *AbbRws_RMQ) WriteFruit(metric telegraf.Metric) error {
 
 	resp, err := s.client.Post(s.Host+s.TargetQueue+"?action=dipc-send", "Content-Type: application/x-www-form-urlencoded", bytes.NewBufferString(fullMessage))
 	if err != nil || resp.StatusCode >= 300 {
+		fmt.Printf("unable to send message: %d: %v", resp.StatusCode, err)
 		return fmt.Errorf("unable to send message: %d: %v", resp.StatusCode, err)
 	}
 	defer resp.Body.Close()
