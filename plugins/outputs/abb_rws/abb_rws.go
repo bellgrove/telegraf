@@ -109,18 +109,18 @@ func (s *AbbRws_RMQ) Close() error {
 // (Telegraf manages the buffer for you). Returning an error will fail this
 // batch of writes and the entire batch will be retried automatically.
 func (s *AbbRws_RMQ) Write(metrics []telegraf.Metric) error {
-	s.Log.Info("New MQTT message, beginning write")
+	// s.Log.Info("New MQTT message, beginning write")
 
 	// Limits number of write attempts
 	s.attempts++
-	if s.attempts >= 4 {
+	if s.attempts >= 20 {
 		s.attempts = 0
 		s.Log.Error("attempts exceeded, aborting message")
 		return nil
 	}
 
 	for _, metric := range metrics {
-		s.Log.Info("New metric: ", metric)
+		// s.Log.Info("New MQTT Message: ", metric)
 
 		// Get message type
 		msgtype, has_type := metric.GetTag("tags_msgtype")
@@ -153,44 +153,45 @@ func (s *AbbRws_RMQ) WriteELog(metric telegraf.Metric) error {
 	}
 
 	// Create instruction message
-	userdef_val := s.RobotId
-	message := ""
+	// userdef_val := s.RobotId
+	// message := ""
 	switch severity {
 	case "0", "1":
 		// Informational Event/State Change -> Update log and do nothing
-		// s.Log.Info("New Info Event: ", metric)
+		s.Log.Info("New Info Event: ", metric)
 		return nil
 	case "2":
 		// Warning Event -> Hold until all clear
 		s.Log.Error("New Warning Event: ", metric)
-		message = "ePMLCommand;[C_Hold]"
+		// message = "ePMLCommand;[C_Hold]"
 	case "3":
 		// Error Event -> Abort
 		s.Log.Error("New Error Event: ", metric)
-		message = "ePMLCommand;[C_Abort]"
+		// message = "ePMLCommand;[C_Abort]"
 	}
 
-	// Send message to robot
-	fullMessage := fmt.Sprintf("dipc-src-queue-name=%s&dipc-cmd=%d&dipc-userdef=%d&dipc-msgtype=%d&dipc-data=%s", s.SenderName, 111, userdef_val, 1, message)
-	s.Log.Info("Trying to send message: ", fullMessage)
+	//	Uncomment this code to enable error message forwarding	///
+	// // Send message to robot
+	// fullMessage := fmt.Sprintf("dipc-src-queue-name=%s&dipc-cmd=%d&dipc-userdef=%d&dipc-msgtype=%d&dipc-data=%s", s.SenderName, 111, userdef_val, 1, message)
+	// s.Log.Info("Trying to send message: ", fullMessage)
 
-	if len(fullMessage) > s.MsgByteLimit {
-		return fmt.Errorf("message is too long to send - max_bytes=%d, msg_bytes=%d", s.MsgByteLimit, len(fullMessage))
-	}
+	// if len(fullMessage) > s.MsgByteLimit {
+	// 	return fmt.Errorf("message is too long to send - max_bytes=%d, msg_bytes=%d", s.MsgByteLimit, len(fullMessage))
+	// }
 
-	resp, err := s.client.Post(s.Host+s.TargetQueue+"?action=dipc-send", "Content-Type: application/x-www-form-urlencoded", bytes.NewBufferString(fullMessage))
-	if err != nil || resp.StatusCode >= 300 {
-		return fmt.Errorf("unable to send message: %d: %w", resp.StatusCode, err)
-	}
-	defer resp.Body.Close()
+	// resp, err := s.client.Post(s.Host+s.TargetQueue+"?action=dipc-send", "Content-Type: application/x-www-form-urlencoded", bytes.NewBufferString(fullMessage))
+	// if err != nil || resp.StatusCode >= 300 {
+	// 	return fmt.Errorf("unable to send message: %d: %w", resp.StatusCode, err)
+	// }
+	// defer resp.Body.Close()
 
-	s.Log.Info("Message Sent")
+	// s.Log.Info("Message Sent")
 
 	return nil
 }
 
 func (s *AbbRws_RMQ) WriteFruit(metric telegraf.Metric) error {
-	s.Log.Info("Writing fruit...")
+	// s.Log.Info("Writing fruit...")
 
 	var x, y, z, w, a, b, cnt any
 	x, _ = metric.GetField("fields_x")
@@ -207,7 +208,7 @@ func (s *AbbRws_RMQ) WriteFruit(metric telegraf.Metric) error {
 	message = strings.ReplaceAll(message, " ", ",")
 	message = strings.ReplaceAll(message, ".000000", ".0")
 	fullMessage := fmt.Sprintf("dipc-src-queue-name=%s&dipc-cmd=%d&dipc-userdef=%d&dipc-msgtype=%d&dipc-data=%s", s.SenderName, 111, userdef_val, 1, message)
-	s.Log.Info("Trying to send message: ", fullMessage)
+	s.Log.Info("Trying to send Fruit: ", fullMessage)
 
 	if len(fullMessage) > s.MsgByteLimit {
 		return fmt.Errorf("message is too long to send - max_bytes=%d, msg_bytes=%d", s.MsgByteLimit, len(fullMessage))
@@ -220,7 +221,7 @@ func (s *AbbRws_RMQ) WriteFruit(metric telegraf.Metric) error {
 	}
 	defer resp.Body.Close()
 
-	s.Log.Info("Message Sent")
+	s.Log.Info("Fruit Sent")
 
 	return nil
 }
@@ -244,7 +245,7 @@ func (s *AbbRws_RMQ) WriteRMQ(metric telegraf.Metric) error {
 	// Send message
 	// Example Message: "dipc-src-queue-name=testq&dipc-cmd=111&dipc-userdef=222&dipc-msgtype=1&dipc-data=hello"
 	fullMessage := fmt.Sprintf("dipc-src-queue-name=%s&dipc-cmd=%d&dipc-userdef=%d&dipc-msgtype=%d&dipc-data=%s", s.SenderName, 111, userdef_val, 1, message)
-	s.Log.Info("Trying to send message: ", fullMessage)
+	s.Log.Info("Trying to forward RMQ: ", fullMessage)
 
 	if len(fullMessage) > s.MsgByteLimit {
 		return fmt.Errorf("message is too long to send - max_bytes=%d, msg_bytes=%d", s.MsgByteLimit, len(fullMessage))
@@ -256,7 +257,7 @@ func (s *AbbRws_RMQ) WriteRMQ(metric telegraf.Metric) error {
 	}
 	defer resp.Body.Close()
 
-	s.Log.Info("Message Sent")
+	s.Log.Info("RMQ Message Sent")
 
 	return nil
 }
